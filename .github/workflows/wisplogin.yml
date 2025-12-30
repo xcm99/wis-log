@@ -1,0 +1,90 @@
+name: Wisp自动登录
+
+on:
+  schedule:
+    - cron: '16 18 2,16 * *' 
+  workflow_dispatch:
+
+permissions:
+  contents: write # 授予工作流写入仓库内容的权限
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Send Start Notification
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TG_CHAT_ID }}
+          token: ${{ secrets.TG_BOT_TOKEN }}
+          message: "*Wispbyte 任务已启动！*\n预计 8–12 分钟完成\n查看: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          format: markdown
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        timeout-minutes: 8
+        run: |
+          echo "开始安装依赖（预计 3–6 分钟）"
+          set -e
+          pip install --quiet playwright aiohttp
+          playwright install chromium --with-deps
+          echo "依赖安装完成"
+
+      - name: Run login script
+        timeout-minutes: 6
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          WISP_ACCOUNTS: ${{ secrets.WISP_ACCOUNTS }}
+        run: |
+          echo "开始执行 login.py（最多 5 分钟）"
+          timeout 5m python login.py && echo "login.py 成功完成" || echo "脚本执行失败或被超时中断"
+          echo "本 step 结束"
+
+      # 新增的提交步骤
+      - name: Commit time.txt to repo
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 如果 time.txt 不存在，说明是第一次运行
+          if [ ! -f time.txt ]; then
+            echo "首次生成时间：$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
+          else
+            echo "$(date +'%Y-%m-%d %H:%M:%S')" > time.txt
+          fi
+          
+          git add time.txt
+          
+          # 如果有更改再提交
+          if git diff --cached --quiet; then
+            echo "无变化，无需提交"
+          else
+            git commit -m "⏱️ 更新时间文件: $(date +'%Y-%m-%d %H:%M:%S')"
+            git push origin HEAD:main
+          fi
+
+  notify-failure:
+    needs: login
+    if: needs.login.result == 'cancelled' || needs.login.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Telegram Alert
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TG_CHAT_ID }}
+          token: ${{ secrets.TG_BOT_TOKEN }}
+          message: "*GitHub Actions 异常*\n\n状态：`${{ needs.login.result }}`\n${{ needs.login.result == 'cancelled' && '超时自动取消' || '脚本执行失败' }}\n\n查看日志：\nhttps://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\n\n发 `/retry` 手动重试"
+          format: markdown
