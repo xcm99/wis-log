@@ -65,3 +65,24 @@ jobs:
           git add last_run.txt
           git commit -m "chore: update last run time" || echo "No changes"
           git push || true
+
+      - name: Heartbeat commit (keep schedule alive)
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "💓 heartbeat $(date -u '+%Y-%m-%d %H:%M:%S')" > .github/heartbeat.txt
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .github/heartbeat.txt
+
+          if git diff --cached --quiet; then
+            echo "No change, skip commit"
+          else
+            git commit -m "chore: heartbeat $(date -u '+%Y-%m-%d')"
+            git push
+          fi
+
+          
